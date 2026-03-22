@@ -3,6 +3,8 @@ package instance
 import (
 	"sync"
 	"time"
+
+	"copilot-go/store"
 )
 
 const usageWindowDuration = 1 * time.Hour
@@ -34,6 +36,38 @@ var (
 	usageMapMu sync.RWMutex
 )
 
+// LoadUsage restores persisted usage stats from disk into usageMap.
+// Called once at startup from main.go.
+func LoadUsage() {
+	persisted := store.LoadUsageStats()
+	now := time.Now()
+
+	usageMapMu.Lock()
+	defer usageMapMu.Unlock()
+
+	for accountID, accData := range persisted {
+		au := &AccountUsage{}
+		for _, rec := range accData.Records {
+			t, err := time.Parse(time.RFC3339, rec.At)
+			if err != nil {
+				continue
+			}
+			au.records = append(au.records, usageRecord{At: t, Failed: rec.Failed, Is429: rec.Is429})
+		}
+		// Trim stale records so GetUsageSnapshot returns correct counts on startup.
+		au.mu.Lock()
+		au.trimLocked(now)
+		au.mu.Unlock()
+
+		if accData.Last429 != "" && accData.Last429 != "0001-01-01T00:00:00Z" {
+			if t, err := time.Parse(time.RFC3339, accData.Last429); err == nil {
+				au.last429 = t
+			}
+		}
+		usageMap[accountID] = au
+	}
+}
+
 func getOrCreateUsage(accountID string) *AccountUsage {
 	usageMapMu.RLock()
 	u, ok := usageMap[accountID]
@@ -59,15 +93,40 @@ func RecordRequest(accountID string, failed bool, is429 bool) {
 	now := time.Now()
 
 	u.mu.Lock()
-	defer u.mu.Unlock()
-
 	u.records = append(u.records, usageRecord{At: now, Failed: failed, Is429: is429})
 	if is429 {
 		u.last429 = now
 	}
-
-	// Trim old records outside the sliding window.
 	u.trimLocked(now)
+	u.mu.Unlock()
+
+	// Persist to disk asynchronously (debounced in store layer).
+	persistUsage()
+}
+
+// persistUsage serialises the current usageMap and triggers an async save.
+func persistUsage() {
+	usageMapMu.RLock()
+	accounts := make(map[string]store.PersistedUsageAccount, len(usageMap))
+	for id, au := range usageMap {
+		au.mu.Lock()
+		recs := make([]store.PersistedUsageRecord, len(au.records))
+		for i, r := range au.records {
+			recs[i] = store.PersistedUsageRecord{
+				At:     r.At.Format(time.RFC3339),
+				Failed: r.Failed,
+				Is429:  r.Is429,
+			}
+		}
+		last429 := ""
+		if !au.last429.IsZero() {
+			last429 = au.last429.Format(time.RFC3339)
+		}
+		accounts[id] = store.PersistedUsageAccount{Records: recs, Last429: last429}
+		au.mu.Unlock()
+	}
+	usageMapMu.RUnlock()
+	store.RequestSaveUsageStats(accounts)
 }
 
 // GetUsageSnapshot returns current usage stats for a single account.

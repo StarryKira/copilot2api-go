@@ -30,6 +30,9 @@ func main() {
 		log.Fatalf("Failed to initialize data paths: %v", err)
 	}
 
+	// Restore persisted usage stats from disk
+	instance.LoadUsage()
+
 	// Load proxy config and apply to HTTP clients
 	if proxyCfg, err := store.GetProxyConfig(); err == nil && proxyCfg.ProxyURL != "" {
 		config.SetProxyURL(proxyCfg.ProxyURL)
