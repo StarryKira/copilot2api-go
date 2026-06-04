@@ -162,7 +162,11 @@ Or create `.claude/settings.json` in your project:
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
     "ANTHROPIC_AUTH_TOKEN": "sk-your-api-key",
     "ANTHROPIC_MODEL": "claude-sonnet-4",
-    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1-mini"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4",
+    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1-mini",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-4.1-mini",
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
 ```
@@ -417,7 +421,11 @@ claude
     "ANTHROPIC_BASE_URL": "http://localhost:4141",
     "ANTHROPIC_AUTH_TOKEN": "sk-your-api-key",
     "ANTHROPIC_MODEL": "claude-sonnet-4",
-    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1-mini"
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4",
+    "ANTHROPIC_SMALL_FAST_MODEL": "gpt-4.1-mini",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-4.1-mini",
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
   }
 }
 ```
