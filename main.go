@@ -60,6 +60,13 @@ func main() {
 	go func() {
 		defer wg.Done()
 		webEngine := gin.New()
+
+		// Prevent Gin's automatic path normalization redirects from causing redirect loops
+		// for the SPA web console (e.g. clients receiving `Location: ./` on `/`).
+		webEngine.RedirectTrailingSlash = false
+		webEngine.RedirectFixedPath = false
+		webEngine.RemoveExtraSlash = false
+
 		if *verbose {
 			webEngine.Use(gin.Logger())
 		}
