@@ -8,49 +8,34 @@
 
 ## English
 
-A reverse-engineered proxy for the GitHub Copilot API, rewritten in Go. Exposes Copilot as OpenAI and Anthropic compatible API services with a multi-account web console for management and load balancing.
+A GitHub Copilot API proxy built on the **official [GitHub Copilot CLI SDK](https://github.com/github/copilot-sdk)**. Exposes Copilot as OpenAI and Anthropic compatible API services with a multi-account web console for management and load balancing.
 
-> **Warning**: This is a reverse-engineered proxy. It is not supported by GitHub and may break unexpectedly. Use at your own risk.
->
-> **GitHub Security Notice**: Excessive automated or scripted use of Copilot may trigger GitHub's abuse-detection systems. Please review [GitHub Acceptable Use Policies](https://docs.github.com/en/site-policy/acceptable-use-policies) and [GitHub Copilot Terms](https://docs.github.com/en/site-policy/github-terms/github-copilot-product-specific-terms).
+> **Note**: Requires an active GitHub Copilot subscription. Please review [GitHub Copilot Terms](https://docs.github.com/en/site-policy/github-terms/github-copilot-product-specific-terms) before use.
 
 ### Features
 
+- **Official SDK**: Uses the official GitHub Copilot CLI SDK — not a reverse-engineered proxy
 - **Multi-Account Management**: Web console to add, remove, start, and stop multiple GitHub Copilot accounts
-- **Pool Mode Load Balancing**: Distribute requests across accounts using Round-Robin or Priority strategies
+- **Pool Mode Load Balancing**: Distribute requests across accounts using Round-Robin, Priority, or Smart strategies
 - **OpenAI Compatible API**: `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`
 - **Anthropic Compatible API**: `/v1/messages`, `/v1/messages/count_tokens` — automatic protocol translation
-- **Model ID Mapping**: Bidirectional mapping between Copilot internal model IDs and standard display IDs (e.g. `claude-sonnet-4-20250514`)
+- **Model ID Mapping**: Bidirectional mapping between Copilot internal model IDs and standard display IDs
 - **Streaming SSE**: Full support for streaming responses in both OpenAI and Anthropic formats
 - **GitHub OAuth Device Flow**: Authenticate accounts directly from the web console
 - **Admin Authentication**: Password-protected console with session management
 - **Bilingual Web UI**: English and Chinese interface with auto-detection
-- **Docker Ready**: Multi-stage Dockerfile for minimal production images
 
 ### Quick Start
 
-#### From Source
+#### Docker (Recommended)
 
 ```bash
-# Build
-go build -o copilot-go .
-
-# Run (from project root so web UI is served)
-./copilot-go
-```
-
-#### Docker
-
-```bash
-# Build image
-docker build -t copilot-go .
-
-# Run with persistent data
 docker run -d \
+  --name copilot-go \
   -p 3000:3000 \
   -p 4141:4141 \
   -v copilot-data:/root/.local/share/copilot-api \
-  copilot-go
+  ghcr.io/starrykira/copilot2api-go
 ```
 
 #### Docker Compose
@@ -58,16 +43,26 @@ docker run -d \
 ```yaml
 services:
   copilot-go:
-    build: .
+    image: ghcr.io/starrykira/copilot2api-go:latest
+    container_name: copilot-go
+    restart: unless-stopped
     ports:
       - "3000:3000"
       - "4141:4141"
     volumes:
       - copilot-data:/root/.local/share/copilot-api
-    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
 
 volumes:
   copilot-data:
+```
+
+#### Build from Source
+
+```bash
+go build -o copilot-go .
+./copilot-go
 ```
 
 ### Command Line Options
@@ -228,7 +223,7 @@ copilot-go/
 │   ├── admin.go                 # Admin auth + sessions
 │   └── model_map.go             # Model ID mapping
 ├── auth/device_flow.go          # GitHub OAuth device flow
-├── copilot/vscode_version.go    # VSCode version fetcher
+├── copilot/vscode_version.go    # VSCode version fetcher (used for model listing)
 ├── anthropic/                   # Anthropic ↔ OpenAI protocol translation
 │   ├── types.go                 # All type definitions
 │   ├── translate_request.go     # Anthropic → OpenAI request
@@ -236,9 +231,10 @@ copilot-go/
 │   ├── stream_translation.go    # Streaming SSE event translation
 │   └── utils.go                 # Stop reason mapping
 ├── instance/                    # Instance lifecycle
-│   ├── manager.go               # Start/stop, token refresh
+│   ├── manager.go               # Start/stop, SDK client management, token refresh
 │   ├── handler.go               # Proxy request handlers
-│   └── load_balancer.go         # Round-robin / priority selection
+│   ├── sdk_completions.go       # Official SDK completions bridge
+│   └── load_balancer.go         # Round-robin / priority / smart selection
 ├── handler/                     # HTTP routing
 │   ├── console_api.go           # Web Console API + static files
 │   └── proxy.go                 # Proxy routes + auth middleware
@@ -270,49 +266,34 @@ MIT
 
 ## 中文
 
-GitHub Copilot API 反向代理服务（Go 重写版），支持多账号 Web 管理、负载均衡，将 Copilot 转为 OpenAI/Anthropic 兼容接口。
+基于官方 **[GitHub Copilot CLI SDK](https://github.com/github/copilot-sdk)** 构建的 Copilot API 代理服务，支持多账号 Web 管理、负载均衡，将 Copilot 转为 OpenAI/Anthropic 兼容接口。
 
-> **警告**：这是一个反向工程代理，未获得 GitHub 官方支持，可能随时失效。使用风险自负。
->
-> **GitHub 安全提示**：过度的自动化或脚本化使用 Copilot 可能触发 GitHub 的滥用检测系统。请查阅 [GitHub 可接受使用政策](https://docs.github.com/en/site-policy/acceptable-use-policies) 和 [GitHub Copilot 条款](https://docs.github.com/en/site-policy/github-terms/github-copilot-product-specific-terms)。
+> **说明**：需要有效的 GitHub Copilot 订阅。使用前请阅读 [GitHub Copilot 条款](https://docs.github.com/en/site-policy/github-terms/github-copilot-product-specific-terms)。
 
 ### 功能特性
 
+- **官方 SDK**：使用官方 GitHub Copilot CLI SDK，非逆向工程代理
 - **多账号管理**：Web 控制台添加、删除、启停多个 GitHub Copilot 账号
-- **Pool 模式负载均衡**：轮询（Round-Robin）或优先级（Priority）策略分发请求
+- **Pool 模式负载均衡**：轮询（Round-Robin）、优先级（Priority）或智能（Smart）策略
 - **OpenAI 兼容接口**：`/v1/chat/completions`、`/v1/models`、`/v1/embeddings`
 - **Anthropic 兼容接口**：`/v1/messages`、`/v1/messages/count_tokens` — 自动协议转换
-- **模型 ID 映射**：Copilot 内部 ID 与标准 ID 双向映射（如 `claude-sonnet-4-20250514`）
+- **模型 ID 映射**：Copilot 内部 ID 与标准 ID 双向映射
 - **流式 SSE**：完整支持 OpenAI 和 Anthropic 格式的流式响应
 - **GitHub OAuth 设备流**：在 Web 控制台直接完成账号认证
 - **管理员认证**：密码保护的控制台，支持会话管理
 - **中英文界面**：自动检测浏览器语言，支持手动切换
-- **Docker 支持**：多阶段构建，生产镜像体积小
 
 ### 快速开始
 
-#### 源码编译
+#### Docker（推荐）
 
 ```bash
-# 编译
-go build -o copilot-go .
-
-# 运行（在项目根目录，以便加载 Web UI）
-./copilot-go
-```
-
-#### Docker
-
-```bash
-# 构建镜像
-docker build -t copilot-go .
-
-# 运行（持久化数据）
 docker run -d \
+  --name copilot-go \
   -p 3000:3000 \
   -p 4141:4141 \
   -v copilot-data:/root/.local/share/copilot-api \
-  copilot-go
+  ghcr.io/starrykira/copilot2api-go
 ```
 
 #### Docker Compose
@@ -320,16 +301,26 @@ docker run -d \
 ```yaml
 services:
   copilot-go:
-    build: .
+    image: ghcr.io/starrykira/copilot2api-go:latest
+    container_name: copilot-go
+    restart: unless-stopped
     ports:
       - "3000:3000"
       - "4141:4141"
     volumes:
       - copilot-data:/root/.local/share/copilot-api
-    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai
 
 volumes:
   copilot-data:
+```
+
+#### 源码编译
+
+```bash
+go build -o copilot-go .
+./copilot-go
 ```
 
 ### 命令行参数
