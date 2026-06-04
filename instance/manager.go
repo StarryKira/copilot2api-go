@@ -14,16 +14,19 @@ import (
 	"time"
 
 	"copilot-go/config"
-	"copilot-go/copilot"
+	vsutil "copilot-go/copilot"
 	"copilot-go/store"
+
+	sdk "github.com/github/copilot-sdk/go"
 )
 
 type ProxyInstance struct {
-	Account  store.Account
-	State    *config.State
-	Status   string // "running", "stopped", "error"
-	Error    string
-	stopChan chan struct{}
+	Account   store.Account
+	State     *config.State
+	SDKClient *sdk.Client
+	Status    string // "running", "stopped", "error"
+	Error     string
+	stopChan  chan struct{}
 }
 
 type CopilotUser struct {
@@ -47,8 +50,8 @@ func StartInstance(account store.Account) error {
 	state.AccountType = account.AccountType
 	state.Unlock()
 
-	// Get VSCode version
-	vsVer := copilot.GetVSCodeVersion()
+	// Get VSCode version (still used for model/token HTTP calls)
+	vsVer := vsutil.GetVSCodeVersion()
 	state.Lock()
 	state.VSCodeVersion = vsVer
 	state.Unlock()
@@ -71,19 +74,29 @@ func StartInstance(account store.Account) error {
 		log.Printf("Warning: failed to fetch models for account %s: %v", account.Name, err)
 	}
 
+	// Start official Copilot CLI SDK client
+	sdkClient := sdk.NewClient(&sdk.ClientOptions{
+		GitHubToken:     account.GithubToken,
+		UseLoggedInUser: sdk.Bool(false),
+	})
+	if err := sdkClient.Start(context.Background()); err != nil {
+		return fmt.Errorf("SDK client failed to start for %s: %w", account.Name, err)
+	}
+
 	stopChan := make(chan struct{})
 	inst := &ProxyInstance{
-		Account:  account,
-		State:    state,
-		Status:   "running",
-		stopChan: stopChan,
+		Account:   account,
+		State:     state,
+		SDKClient: sdkClient,
+		Status:    "running",
+		stopChan:  stopChan,
 	}
 
 	mu.Lock()
 	instances[account.ID] = inst
 	mu.Unlock()
 
-	// Start background token refresh
+	// Start background token refresh (still needed for models/embeddings endpoints)
 	go tokenRefreshLoop(inst)
 
 	log.Printf("Instance started for account: %s", account.Name)
@@ -100,9 +113,22 @@ func StopInstance(accountID string) {
 	if inst.Status == "running" {
 		close(inst.stopChan)
 	}
+	if inst.SDKClient != nil {
+		_ = inst.SDKClient.Stop()
+	}
 	inst.Status = "stopped"
 	mu.Unlock()
 	log.Printf("Instance stopped for account: %s", inst.Account.Name)
+}
+
+// GetSDKClient returns the SDK client for the given account, or nil if not running.
+func GetSDKClient(accountID string) *sdk.Client {
+	mu.RLock()
+	defer mu.RUnlock()
+	if inst, ok := instances[accountID]; ok {
+		return inst.SDKClient
+	}
+	return nil
 }
 
 func GetInstanceStatus(accountID string) string {
@@ -425,9 +451,9 @@ func ProxyRequestWithBytesCtx(ctx context.Context, state *config.State, method, 
 	baseURL := config.CopilotBaseURL(state.AccountType)
 	state.RUnlock()
 
-	url := baseURL + path
+	requestURL := baseURL + path
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}

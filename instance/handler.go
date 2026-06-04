@@ -15,13 +15,13 @@ import (
 	"copilot-go/store"
 
 	"github.com/gin-gonic/gin"
+	sdk "github.com/github/copilot-sdk/go"
 )
 
-// DoCompletionsProxy performs the upstream request for completions and returns the raw response.
+// DoCompletionsProxy performs the upstream request for completions via the official SDK.
 // The caller is responsible for closing resp.Body.
-func DoCompletionsProxy(_ *gin.Context, state *config.State, bodyBytes []byte) (*http.Response, error) {
-	bodyBytes, extraHeaders, hasVision := normalizeCompletionsPayload(state, bodyBytes)
-	return ProxyRequestWithBytes(state, "POST", "/chat/completions", bodyBytes, extraHeaders, hasVision)
+func DoCompletionsProxy(c *gin.Context, _ *config.State, sdkClient *sdk.Client, bodyBytes []byte) (*http.Response, error) {
+	return SDKDoCompletions(c.Request.Context(), sdkClient, bodyBytes)
 }
 
 // ForwardCompletionsResponse writes the upstream response to the client.
@@ -126,9 +126,9 @@ func ForwardEmbeddingsResponse(c *gin.Context, resp *http.Response) {
 	c.Data(resp.StatusCode, "application/json", body)
 }
 
-// DoMessagesProxy performs the upstream request for Anthropic messages.
+// DoMessagesProxy performs the upstream request for Anthropic messages via the official SDK.
 // Returns the raw response. bodyBytes is the original Anthropic payload.
-func DoMessagesProxy(c *gin.Context, state *config.State, bodyBytes []byte) (*http.Response, error) {
+func DoMessagesProxy(c *gin.Context, state *config.State, sdkClient *sdk.Client, bodyBytes []byte) (*http.Response, error) {
 	var anthropicPayload anthropic.AnthropicMessagesPayload
 	if err := json.Unmarshal(bodyBytes, &anthropicPayload); err != nil {
 		return nil, fmt.Errorf("invalid request: %v", err)
@@ -142,7 +142,6 @@ func DoMessagesProxy(c *gin.Context, state *config.State, bodyBytes []byte) (*ht
 		}
 	}
 
-	hasVision := checkVisionContent(anthropicPayload)
 	openaiPayload := anthropic.TranslateToOpenAI(anthropicPayload)
 
 	openaiBytes, err := json.Marshal(openaiPayload)
@@ -150,10 +149,7 @@ func DoMessagesProxy(c *gin.Context, state *config.State, bodyBytes []byte) (*ht
 		return nil, fmt.Errorf("failed to marshal request: %v", err)
 	}
 
-	extraHeaders := make(http.Header)
-	extraHeaders.Set("X-Initiator", initiatorFromMessages(openaiPayload.Messages))
-
-	return ProxyRequestWithBytesCtx(c.Request.Context(), state, "POST", "/chat/completions", openaiBytes, extraHeaders, hasVision)
+	return SDKDoCompletions(c.Request.Context(), sdkClient, openaiBytes)
 }
 
 // ForwardMessagesResponse writes the upstream response to the client in Anthropic format.
@@ -281,42 +277,6 @@ func handleAnthropicStream(c *gin.Context, resp *http.Response) {
 	}
 }
 
-func normalizeCompletionsPayload(state *config.State, bodyBytes []byte) ([]byte, http.Header, bool) {
-	extraHeaders := make(http.Header)
-	extraHeaders.Set("X-Initiator", "user")
-
-	var payload map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		return bodyBytes, extraHeaders, false
-	}
-
-	if model, ok := payload["model"].(string); ok {
-		payload["model"] = store.ToCopilotID(model)
-	}
-
-	// Auto-fill max_tokens from model capabilities if not provided
-	modelID, _ := payload["model"].(string)
-	if _, hasMax := payload["max_tokens"]; !hasMax {
-		if _, hasMaxComp := payload["max_completion_tokens"]; !hasMaxComp {
-			if limit := lookupMaxOutputTokens(state, modelID); limit > 0 {
-				payload["max_tokens"] = limit
-			}
-		}
-	}
-
-	if hasAgentMessages(payload["messages"]) {
-		extraHeaders.Set("X-Initiator", "agent")
-	}
-
-	hasVision := checkCompletionsVision(payload["messages"])
-
-	normalized, err := json.Marshal(payload)
-	if err != nil {
-		return bodyBytes, extraHeaders, hasVision
-	}
-	return normalized, extraHeaders, hasVision
-}
-
 // lookupMaxOutputTokens finds the max_output_tokens for a model from cached capabilities.
 func lookupMaxOutputTokens(state *config.State, modelID string) int {
 	if state == nil || modelID == "" {
@@ -334,66 +294,6 @@ func lookupMaxOutputTokens(state *config.State, modelID string) int {
 		}
 	}
 	return 0
-}
-
-// checkCompletionsVision checks OpenAI-format messages for image_url content.
-func checkCompletionsVision(rawMessages interface{}) bool {
-	messages, ok := rawMessages.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, rawMsg := range messages {
-		msg, ok := rawMsg.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		content, ok := msg["content"]
-		if !ok {
-			continue
-		}
-		parts, ok := content.([]interface{})
-		if !ok {
-			continue
-		}
-		for _, rawPart := range parts {
-			part, ok := rawPart.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if partType, _ := part["type"].(string); partType == "image_url" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func initiatorFromMessages(messages []anthropic.OpenAIMessage) string {
-	for _, message := range messages {
-		if message.Role == "assistant" || message.Role == "tool" {
-			return "agent"
-		}
-	}
-	return "user"
-}
-
-func hasAgentMessages(rawMessages interface{}) bool {
-	messages, ok := rawMessages.([]interface{})
-	if !ok {
-		return false
-	}
-
-	for _, rawMessage := range messages {
-		message, ok := rawMessage.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		role, _ := message["role"].(string)
-		if role == "assistant" || role == "tool" {
-			return true
-		}
-	}
-	return false
 }
 
 func writeSSE(w io.Writer, event string, data interface{}) error {
@@ -493,18 +393,6 @@ func hasClaudeCodeMCPTools(anthropicBeta string, tools []anthropic.AnthropicTool
 	for _, tool := range tools {
 		if strings.HasPrefix(tool.Name, "mcp__") {
 			return true
-		}
-	}
-	return false
-}
-
-func checkVisionContent(payload anthropic.AnthropicMessagesPayload) bool {
-	for _, msg := range payload.Messages {
-		blocks := anthropic.ParseContentBlocksPublic(msg.Content)
-		for _, b := range blocks {
-			if b.Type == "image" {
-				return true
-			}
 		}
 	}
 	return false
