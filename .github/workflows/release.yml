@@ -10,72 +10,10 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Build frontend
-        working-directory: web
-        run: bun install --frozen-lockfile && bun run build
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build binaries
-        run: |
-          VERSION="${GITHUB_REF_NAME}"
-          mkdir -p dist
-
-          platforms=(
-            "linux/amd64"
-            "linux/arm64"
-            "windows/amd64"
-            "darwin/amd64"
-            "darwin/arm64"
-          )
-
-          for platform in "${platforms[@]}"; do
-            GOOS="${platform%/*}"
-            GOARCH="${platform#*/}"
-            EXT=""
-            [ "$GOOS" = "windows" ] && EXT=".exe"
-
-            PKG="copilot-go_${VERSION}_${GOOS}_${GOARCH}"
-            mkdir -p "dist/${PKG}"
-
-            GOOS="$GOOS" GOARCH="$GOARCH" CGO_ENABLED=0 \
-              go build -ldflags="-s -w" \
-              -o "dist/${PKG}/copilot-go${EXT}" .
-
-            if [ "$GOOS" = "windows" ]; then
-              (cd dist && zip -r "${PKG}.zip" "${PKG}")
-            else
-              tar -czf "dist/${PKG}.tar.gz" -C dist "${PKG}"
-            fi
-          done
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-
   docker:
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       packages: write
 
     steps:
@@ -115,3 +53,36 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## 🐳 Docker
+
+            ```bash
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ```
+
+            **Docker Compose:**
+
+            ```yaml
+            services:
+              copilot-go:
+                image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+                container_name: copilot-go
+                restart: unless-stopped
+                ports:
+                  - "3000:3000"
+                  - "4141:4141"
+                volumes:
+                  - copilot-data:/root/.local/share/copilot-api
+                environment:
+                  - TZ=Asia/Shanghai
+
+            volumes:
+              copilot-data:
+            ```
+
+            ---

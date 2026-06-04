@@ -1,8 +1,6 @@
 services:
   copilot-go:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/starrykira/copilot2api-go:latest
     container_name: copilot-go
     restart: unless-stopped
     ports:
@@ -12,8 +10,7 @@ services:
       - copilot-data:/root/.local/share/copilot-api
     environment:
       - TZ=Asia/Shanghai
-    command: ["./copilot-go", "--web-port=3000", "--proxy-port=4141"]
 
 volumes:
   copilot-data:
-    driver: localx
+    driver: local
