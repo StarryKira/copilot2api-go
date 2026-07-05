@@ -97,7 +97,12 @@ type State struct {
 	TokenExpiresAt int64 // Unix timestamp when the Copilot token expires
 	AccountType    string
 	Models         *ModelsResponse
-	VSCodeVersion  string
+	// SDKModels are the models the Copilot CLI SDK accepts in session.create —
+	// a different (usually smaller) set than the REST /models list. Clients
+	// must pick from it, so it takes precedence wherever models are listed;
+	// Models remains as fallback and for max_output_tokens lookup.
+	SDKModels     *ModelsResponse
+	VSCodeVersion string
 }
 
 func NewState() *State {

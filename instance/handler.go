@@ -67,10 +67,15 @@ func ForwardCompletionsResponse(c *gin.Context, resp *http.Response) {
 	}
 }
 
-// ModelsHandler returns cached models with display ID mapping.
+// ModelsHandler returns cached models with display ID mapping. Models the SDK
+// accepts in session.create take precedence over the REST /models list, which
+// contains entries that cannot actually be used through this proxy.
 func ModelsHandler(c *gin.Context, state *config.State) {
 	state.RLock()
-	models := state.Models
+	models := state.SDKModels
+	if models == nil {
+		models = state.Models
+	}
 	state.RUnlock()
 
 	if models == nil {

@@ -83,6 +83,15 @@ func StartInstance(account store.Account) error {
 		return fmt.Errorf("SDK client failed to start for %s: %w", account.Name, err)
 	}
 
+	// Cache the models the SDK actually accepts; /v1/models serves these.
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := fetchSDKModels(ctx, sdkClient, state); err != nil {
+			log.Printf("Warning: failed to fetch SDK models for account %s: %v", account.Name, err)
+		}
+		cancel()
+	}
+
 	stopChan := make(chan struct{})
 	inst := &ProxyInstance{
 		Account:   account,
@@ -170,7 +179,10 @@ func GetAllCachedModels() []config.ModelEntry {
 			continue
 		}
 		inst.State.RLock()
-		models := inst.State.Models
+		models := inst.State.SDKModels
+		if models == nil {
+			models = inst.State.Models
+		}
 		inst.State.RUnlock()
 		if models == nil {
 			continue
@@ -368,6 +380,48 @@ func fetchModels(state *config.State) error {
 	state.Models = &models
 	state.Unlock()
 	return nil
+}
+
+// fetchSDKModels asks the Copilot CLI SDK which models its sessions accept and
+// caches them on the state. The REST /models list (fetchModels) contains models
+// that session.create rejects, so listings must come from here (issue #14).
+func fetchSDKModels(ctx context.Context, sdkClient *sdk.Client, state *config.State) error {
+	models, err := sdkClient.ListModels(ctx)
+	if err != nil {
+		return err
+	}
+	resp := sdkModelsToResponse(models)
+
+	state.Lock()
+	state.SDKModels = resp
+	state.Unlock()
+	return nil
+}
+
+// sdkModelsToResponse converts SDK model infos to the OpenAI-style model list
+// served by /v1/models.
+func sdkModelsToResponse(models []sdk.ModelInfo) *config.ModelsResponse {
+	resp := &config.ModelsResponse{Object: "list", Data: make([]config.ModelEntry, 0, len(models))}
+	for _, m := range models {
+		entry := config.ModelEntry{
+			ID:      m.ID,
+			Object:  "model",
+			OwnedBy: "github-copilot",
+			Name:    m.Name,
+		}
+		limits := config.ModelLimits{}
+		if m.Capabilities.Limits.MaxPromptTokens != nil {
+			limits.MaxPromptTokens = *m.Capabilities.Limits.MaxPromptTokens
+		}
+		if m.Capabilities.Limits.MaxContextWindowTokens != nil {
+			limits.MaxContextWindow = *m.Capabilities.Limits.MaxContextWindowTokens
+		}
+		if limits != (config.ModelLimits{}) {
+			entry.Capabilities = &config.ModelCapabilities{Type: "chat", Limits: limits}
+		}
+		resp.Data = append(resp.Data, entry)
+	}
+	return resp
 }
 
 var (
