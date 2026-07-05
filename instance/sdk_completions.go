@@ -90,6 +90,7 @@ func buildToolInstructions(tools []anthropic.OpenAITool) string {
 	b.WriteString(mcpOpenTag + `{"name":"<tool_name>","arguments":{<arguments as a JSON object>}}` + mcpCloseTag + "\n")
 	b.WriteString("Rules:\n")
 	b.WriteString("- `arguments` MUST be a valid JSON object matching that tool's input schema.\n")
+	b.WriteString("- Every block MUST end with the closing tag " + mcpCloseTag + " — never stop before writing it.\n")
 	b.WriteString("- Emit one block per tool call; you may emit several blocks to call multiple tools.\n")
 	b.WriteString("- Do NOT wrap the block in code fences and do NOT invent tools that are not listed.\n")
 	b.WriteString("- After emitting tool-call block(s), stop and wait for the tool result before continuing.\n\n")
@@ -281,13 +282,30 @@ func (p *mcpParser) handleTool(jsonStr string, onTool func(idx int, id, name, ar
 	return true
 }
 
-// flushRemaining emits any leftover buffered text (e.g. an unterminated block)
-// at end of stream so no content is dropped.
-func (p *mcpParser) flushRemaining(onText func(string)) {
-	if p.pending != "" {
-		onText(p.pending)
-		p.pending = ""
+// flushRemaining drains the buffer at end of stream. Models often stop right
+// after the JSON payload without writing the close tag (observed live with
+// "auto"), so an unterminated block whose payload parses cleanly is salvaged
+// as a tool call; anything else is emitted as text so no content is dropped.
+func (p *mcpParser) flushRemaining(onText func(string), onTool func(idx int, id, name, args string)) {
+	if p.pending == "" {
+		return
 	}
+	if inner, ok := strings.CutPrefix(p.pending, mcpOpenTag); ok {
+		inner = strings.TrimSpace(inner)
+		// Tolerate a truncated close tag after the payload.
+		for k := len(mcpCloseTag) - 1; k > 0; k-- {
+			if strings.HasSuffix(inner, mcpCloseTag[:k]) {
+				inner = strings.TrimSpace(inner[:len(inner)-k])
+				break
+			}
+		}
+		if p.handleTool(inner, onTool) {
+			p.pending = ""
+			return
+		}
+	}
+	onText(p.pending)
+	p.pending = ""
 }
 
 // partialOpenSuffix returns the length of the longest suffix of s that is also
@@ -343,7 +361,7 @@ func sdkStream(ctx context.Context, session *sdk.Session, prompt, model string) 
 				parser.feed(d.DeltaContent, writeText, writeTool)
 			case *sdk.SessionIdleData:
 				_ = d
-				parser.flushRemaining(writeText)
+				parser.flushRemaining(writeText, writeTool)
 				finish := "stop"
 				if parser.sawTool {
 					finish = "tool_calls"
@@ -397,7 +415,7 @@ func sdkSync(ctx context.Context, session *sdk.Session, prompt, model string) (*
 	var toolCalls []map[string]interface{}
 	parser := &mcpParser{}
 	collectText := func(t string) { textParts = append(textParts, t) }
-	parser.feed(content, collectText, func(idx int, id, name, args string) {
+	collectTool := func(idx int, id, name, args string) {
 		toolCalls = append(toolCalls, map[string]interface{}{
 			"index": idx,
 			"id":    id,
@@ -407,8 +425,9 @@ func sdkSync(ctx context.Context, session *sdk.Session, prompt, model string) (*
 				"arguments": args,
 			},
 		})
-	})
-	parser.flushRemaining(collectText)
+	}
+	parser.feed(content, collectText, collectTool)
+	parser.flushRemaining(collectText, collectTool)
 
 	message := map[string]interface{}{
 		"role":    "assistant",

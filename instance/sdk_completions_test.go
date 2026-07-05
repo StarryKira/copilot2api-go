@@ -28,7 +28,7 @@ func drive(fragments []string) (string, []parsedTool, bool) {
 	for _, f := range fragments {
 		p.feed(f, onText, onTool)
 	}
-	p.flushRemaining(onText)
+	p.flushRemaining(onText, onTool)
 	return text.String(), tools, p.sawTool
 }
 
@@ -125,6 +125,39 @@ func TestParserComplexArgsPreserved(t *testing.T) {
 	}
 }
 
+func TestParserUnterminatedBlockSalvagedAsTool(t *testing.T) {
+	// Models often stop right after the JSON without the close tag.
+	cases := []string{
+		`[mcp.result]{"name":"get_weather","arguments":{"city":"Paris"}}`,
+		`[mcp.result]{"name":"get_weather","arguments":{"city":"Paris"}}` + "\n",
+		`[mcp.result]{"name":"get_weather","arguments":{"city":"Paris"}}[/mcp`,
+	}
+	for _, in := range cases {
+		text, tools, saw := drive([]string{in})
+		if !saw || len(tools) != 1 {
+			t.Fatalf("input %q: expected salvaged tool, got tools=%d text=%q", in, len(tools), text)
+		}
+		if tools[0].name != "get_weather" || tools[0].args != `{"city":"Paris"}` {
+			t.Fatalf("input %q: unexpected tool %+v", in, tools[0])
+		}
+		if text != "" {
+			t.Fatalf("input %q: expected no text, got %q", in, text)
+		}
+	}
+}
+
+func TestParserUnterminatedInvalidBlockKeptAsText(t *testing.T) {
+	// Truncated JSON (e.g. max_tokens cutoff) must fall back to text.
+	in := `[mcp.result]{"name":"get_wea`
+	text, tools, _ := drive([]string{in})
+	if len(tools) != 0 {
+		t.Fatalf("expected no tools, got %+v", tools)
+	}
+	if text != in {
+		t.Fatalf("expected raw text back, got %q", text)
+	}
+}
+
 func TestParserInvalidToolBlockSurfacedAsText(t *testing.T) {
 	in := `[mcp.result]this is not json[/mcp.result]`
 	text, tools, saw := drive([]string{in})
@@ -163,7 +196,7 @@ func streamToAnthropic(t *testing.T, chunks []string) string {
 	for _, c := range chunks {
 		p.feed(c, writeText, writeTool)
 	}
-	p.flushRemaining(writeText)
+	p.flushRemaining(writeText, writeTool)
 	finish := "stop"
 	if p.sawTool {
 		finish = "tool_calls"
