@@ -87,8 +87,8 @@ func TranslateChunkToAnthropicEvents(chunk ChatCompletionResponse, state *Anthro
 
 		// Handle text content
 		if delta.Content != "" {
-			if !state.ContentBlockOpen || len(state.ToolCalls) > 0 {
-				// Need to open a new text block
+			if !state.ContentBlockOpen || state.OpenBlockIsTool {
+				// No block open, or a tool_use block is open — start a new text block.
 				events = append(events, closeContentBlock(state)...)
 				events = append(events, StreamEvent{
 					Event: "content_block_start",
@@ -102,6 +102,7 @@ func TranslateChunkToAnthropicEvents(chunk ChatCompletionResponse, state *Anthro
 					},
 				})
 				state.ContentBlockOpen = true
+				state.OpenBlockIsTool = false
 			}
 			events = append(events, StreamEvent{
 				Event: "content_block_delta",
@@ -144,6 +145,7 @@ func TranslateChunkToAnthropicEvents(chunk ChatCompletionResponse, state *Anthro
 						},
 					})
 					state.ContentBlockOpen = true
+					state.OpenBlockIsTool = true
 				}
 
 				if tc.Function.Arguments != "" {

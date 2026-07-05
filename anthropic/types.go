@@ -280,6 +280,7 @@ type AnthropicStreamState struct {
 	MessageStartSent     bool
 	ContentBlockIndex    int
 	ContentBlockOpen     bool
+	OpenBlockIsTool      bool
 	ToolCalls            map[int]*ToolCallState
 	InputTokens          int
 	OutputTokens         int
